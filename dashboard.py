@@ -100,8 +100,8 @@ app.layout = dbc.Container([
                 columnDefs=[{"field": 'participant_id'}],
                 id='participant-table'
             ),
-            style={'width': '15%', 'margin-left': '5%'}
         )
+
     ])
 
 ])
