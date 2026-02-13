@@ -12,6 +12,7 @@ import traceback
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import json
+from datetime import datetime
 
 import pandas as pd
 import plotly.express as px
@@ -676,6 +677,55 @@ app.layout = dbc.Container(
                 )
             ]
         ),
+        # Export section
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Card(
+                            [
+                                dbc.CardBody(
+                                    [
+                                        html.H5("Export Filtered Table", className="card-title"),
+                                        dbc.InputGroup(
+                                            [
+                                                dbc.Input(
+                                                    id="export-path-input",
+                                                    placeholder="Enter directory path (e.g., C:/Users/username/Desktop)",
+                                                    type="text",
+                                                    value="",
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        dbc.Button(
+                                            "Export Filtered Table",
+                                            id="export-table-btn",
+                                            color="primary",
+                                            size="lg",
+                                            className="w-100",
+                                            style={
+                                                "backgroundColor": "#003366",
+                                                "color": "white",
+                                                "fontWeight": "bold",
+                                                "fontSize": "1.2rem",
+                                                "padding": "15px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            id="export-status-message",
+                                            className="mt-2 small",
+                                        ),
+                                    ]
+                                )
+                            ]
+                        ),
+                    ],
+                    width=12,
+                )
+            ],
+            className="mb-4 mt-4",
+        ),
         # Hidden stores for app state
         dcc.Store(id="current-data-store", storage_type="memory"),
         dcc.Store(id="filter-count-store", data={"count": 1}),
@@ -1296,6 +1346,52 @@ def update_statistics(data):
 def show_table_info(table_id):
     """Show info about the table."""
     return "Use the search and filter features above to find and query data. Cells display up to 40 characters - copy full text as needed."
+
+
+@app.callback(
+    Output("export-status-message", "children"),
+    Output("export-status-message", "className"),
+    Input("export-table-btn", "n_clicks"),
+    State("export-path-input", "value"),
+    State("current-data-store", "data"),
+    prevent_initial_call=True,
+)
+def export_filtered_table(n_clicks, export_path, data):
+    """Export the filtered table to a TSV file with timestamp."""
+    if not data:
+        return "No data to export. Please load and filter a table first.", "mt-2 small text-danger"
+    
+    if not export_path:
+        return "Please enter a directory path.", "mt-2 small text-danger"
+    
+    try:
+        # Expand user path and create Path object
+        export_dir = Path(export_path).expanduser()
+        
+        # Check if directory exists
+        if not export_dir.exists():
+            return f"Error: Directory does not exist: {export_path}", "mt-2 small text-danger"
+        
+        if not export_dir.is_dir():
+            return f"Error: Path is not a directory: {export_path}", "mt-2 small text-danger"
+        
+        # Create timestamp in YYYYMMDD_hhmmss format
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create filename
+        filename = f"{timestamp}_dataset_browser_export.tsv"
+        file_path = export_dir / filename
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data)
+        
+        # Export to TSV
+        df.to_csv(file_path, sep="\t", index=False)
+        
+        return f"✓ Successfully exported {len(df)} rows to: {file_path}", "mt-2 small text-success"
+        
+    except Exception as e:
+        return f"Error exporting file: {str(e)}", "mt-2 small text-danger"
 
 
 if __name__ == "__main__":
