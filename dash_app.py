@@ -217,7 +217,7 @@ class DatabaseConnection:
             return pd.DataFrame(), str(e)
 
     def get_table_data(
-        self, table_name: str, filters: List[Dict] = None, limit: int = 500
+        self, table_name: str, filters: List[Dict] = None, limit: Optional[int] = 500
     ) -> Tuple[pd.DataFrame, Optional[str], str]:
         """Get data from a specific table with optional filters.
         
@@ -230,7 +230,7 @@ class DatabaseConnection:
         if where_clause:
             query += f" WHERE {where_clause}"
         
-        if limit:
+        if limit is not None:
             query += f" LIMIT {limit}"
 
         # Build display query with actual values
@@ -238,7 +238,7 @@ class DatabaseConnection:
         if where_clause:
             display_where = self.format_sql_for_display(where_clause, params)
             display_query += f" WHERE {display_where}"
-        if limit:
+        if limit is not None:
             display_query += f" LIMIT {limit}"
 
         try:
@@ -728,6 +728,7 @@ app.layout = dbc.Container(
         ),
         # Hidden stores for app state
         dcc.Store(id="current-data-store", storage_type="memory"),
+        dcc.Store(id="current-filters-store", storage_type="memory"),
         dcc.Store(id="filter-count-store", data={"count": 1}),
         dcc.Store(id="current-table-store", storage_type="memory"),
         dcc.Store(id="table-columns-store", storage_type="memory"),
@@ -1027,6 +1028,7 @@ def update_filter_value_options(fields, operators, search_values, table_name, db
     Output("current-data-store", "data"),
     Output("viz-column-selector", "options"),
     Output("table-full-data-store", "data"),
+    Output("current-filters-store", "data"),
     Input("apply-filters-btn", "n_clicks"),
     Input("load-table-btn", "n_clicks"),
     State({"type": "filter-field", "index": ALL}, "value"),
@@ -1064,13 +1066,13 @@ def apply_filters(
     try:
         db = DatabaseConnection(db_path)
         if not db.connect():
-            return "Error: Could not connect to database", "", "", "", None, [], None
+            return "Error: Could not connect to database", "", "", "", None, [], None, None
 
         df, error, sql_query = db.get_table_data(table_name, filters=filters)
         db.close()
 
         if error:
-            return f"Query Error: {error}", "", "", f"Error in query: {sql_query}", None, [], None
+            return f"Query Error: {error}", "", "", f"Error in query: {sql_query}", None, [], None, filters
 
         if df.empty:
             return (
@@ -1081,6 +1083,7 @@ def apply_filters(
                 None,
                 [],
                 None,
+                filters,
             )
 
         # Create table from results
@@ -1109,10 +1112,10 @@ def apply_filters(
         # Format SQL display
         sql_display = html.Code(f"SQL: {sql_query}")
 
-        return "", table, info, sql_display, df_data, col_options, full_data_dict
+        return "", table, info, sql_display, df_data, col_options, full_data_dict, filters
 
     except Exception as e:
-        return f"Error: {traceback.format_exc()}", "", "", "", None, [], None
+        return f"Error: {traceback.format_exc()}", "", "", "", None, [], None, None
 
 
 @app.callback(
@@ -1144,6 +1147,7 @@ def clear_query(n_clicks):
     Output("current-data-store", "data", allow_duplicate=True),
     Output("viz-column-selector", "options", allow_duplicate=True),
     Output("table-full-data-store", "data", allow_duplicate=True),
+    Output("current-filters-store", "data", allow_duplicate=True),
     Input("execute-query-btn", "n_clicks"),
     State("query-input", "value"),
     State("db-path-input", "value"),
@@ -1157,18 +1161,18 @@ def execute_custom_query(n_clicks, query, db_path):
     db_path = str(Path(db_path).expanduser())
 
     if not os.path.exists(db_path):
-        return "", "", "Database file not found", "", None, [], None
+        return "", "", "Database file not found", "", None, [], None, None
 
     try:
         db = DatabaseConnection(db_path)
         if not db.connect():
-            return "", "", "Error: Could not connect to database", "", None, [], None
+            return "", "", "Error: Could not connect to database", "", None, [], None, None
 
         df, error = db.execute_query(query)
         db.close()
 
         if error:
-            return "", "", f"Query Error: {error}", f"SQL: {query}", None, [], None
+            return "", "", f"Query Error: {error}", f"SQL: {query}", None, [], None, None
 
         if df.empty:
             return (
@@ -1178,6 +1182,7 @@ def execute_custom_query(n_clicks, query, db_path):
                 f"SQL: {query}",
                 None,
                 [],
+                None,
                 None,
             )
 
@@ -1204,7 +1209,7 @@ def execute_custom_query(n_clicks, query, db_path):
                 col_key = str(col)
                 full_data_dict[row_key][col_key] = str(row[col])
 
-        return table, info, "", f"SQL: {query}", df_data, col_options, full_data_dict
+        return table, info, "", f"SQL: {query}", df_data, col_options, full_data_dict, None
 
     except Exception as e:
         return (
@@ -1214,6 +1219,7 @@ def execute_custom_query(n_clicks, query, db_path):
             f"SQL: {query}",
             None,
             [],
+            None,
             None,
         )
 
@@ -1353,12 +1359,15 @@ def show_table_info(table_id):
     Output("export-status-message", "className"),
     Input("export-table-btn", "n_clicks"),
     State("export-path-input", "value"),
-    State("current-data-store", "data"),
+    State("current-filters-store", "data"),
+    State("current-table-store", "data"),
+    State("db-path-input", "value"),
     prevent_initial_call=True,
 )
-def export_filtered_table(n_clicks, export_path, data):
-    """Export the filtered table to a TSV file with timestamp."""
-    if not data:
+def export_filtered_table(n_clicks, export_path, filters, table_name, db_path):
+    """Export the filtered table to a TSV file with timestamp.
+    Re-executes the query without LIMIT to get all matching rows."""
+    if not table_name or not db_path:
         return "No data to export. Please load and filter a table first.", "mt-2 small text-danger"
     
     if not export_path:
@@ -1370,25 +1379,53 @@ def export_filtered_table(n_clicks, export_path, data):
         
         # Check if directory exists
         if not export_dir.exists():
-            return f"Error: Directory does not exist: {export_path}", "mt-2 small text-danger"
+            # Try to create the directory
+            try:
+                export_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as mkdir_error:
+                return f"Error: Directory does not exist and could not be created: {export_path}", "mt-2 small text-danger"
         
         if not export_dir.is_dir():
             return f"Error: Path is not a directory: {export_path}", "mt-2 small text-danger"
         
+        # Re-execute the query WITHOUT the LIMIT to get all data
+        db_path_expanded = str(Path(db_path).expanduser())
+        db = DatabaseConnection(db_path_expanded)
+        if not db.connect():
+            return "Error: Could not connect to database", "mt-2 small text-danger"
+        
+        # Get ALL data by passing limit=None
+        df, error, sql_query = db.get_table_data(table_name, filters=filters or [], limit=None)
+        db.close()
+        
+        if error:
+            return f"Query Error: {error}", "mt-2 small text-danger"
+        
+        if df.empty:
+            return "No data to export (query returned 0 rows).", "mt-2 small text-danger"
+        
         # Create timestamp in YYYYMMDD_hhmmss format
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Create filename
-        filename = f"{timestamp}_dataset_browser_export.tsv"
-        file_path = export_dir / filename
+        # Create filenames
+        basename = f"{timestamp}_dataset_browser_export"
+        tsv_filename = f"{basename}.tsv"
+        query_filename = f"{basename}_query.txt"
         
-        # Convert data to DataFrame
-        df = pd.DataFrame(data)
+        tsv_path = export_dir / tsv_filename
+        query_path = export_dir / query_filename
         
-        # Export to TSV
-        df.to_csv(file_path, sep="\t", index=False)
+        # Export data to TSV
+        df.to_csv(tsv_path, sep="\t", index=False)
         
-        return f"✓ Successfully exported {len(df)} rows to: {file_path}", "mt-2 small text-success"
+        # Export SQL query to text file
+        with open(query_path, "w", encoding="utf-8") as f:
+            f.write(sql_query)
+        
+        return (
+            f"✓ Successfully exported {len(df)} rows to: {tsv_path}\n"
+            f"✓ SQL query saved to: {query_path}"
+        ), "mt-2 small text-success"
         
     except Exception as e:
         return f"Error exporting file: {str(e)}", "mt-2 small text-danger"

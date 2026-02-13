@@ -52,16 +52,16 @@ def main():
         "-j", "--join-type",
         type=str,
         choices=["left", "right", "inner", "outer"],
-        default="left",
+        default="outer",
         metavar="JOIN_TYPE",
-        help="Type of join to perform: left, right, inner, or outer (default: left)."
+        help="Type of join to perform: left, right, inner, or outer (default: outer)."
     )
     parser.add_argument(
         "-o", "--output-table",
         type=str,
-        default="joined_data",
+        default="data",
         metavar="OUTPUT_TABLE",
-        help="Name of the output table in the database (default: joined_data)."
+        help="Name of the output table in the database (default: data)."
     )
     parser.add_argument(
         "--replace",
