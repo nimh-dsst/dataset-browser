@@ -1,4 +1,10 @@
 data/
 .vscode/
-uv.lock
 .venv/
+*.sqlite
+app/
+.cache/
+__pycache__/
+*.py[cod]
+*$py.class
+uv.lock

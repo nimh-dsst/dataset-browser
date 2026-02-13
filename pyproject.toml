@@ -1,13 +1,15 @@
 [project]
 name = "dataset-browser"
 version = "0.1.0"
-description = "Add your description here"
+description = "SQLite database browser with Plotly Dash - query, visualize, and analyze large databases"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dash>=3.3.0",
     "dash-ag-grid>=32.3.2",
     "dash-bootstrap-components>=2.0.4",
+    "dash-extensions>=1.0.42",
     "fastparquet>=2024.11.0",
     "pandas>=2.3.3",
+    "plotly>=5.18.0",
 ]
