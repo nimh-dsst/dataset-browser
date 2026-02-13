@@ -693,7 +693,7 @@ app.layout = dbc.Container(
                                                     id="export-path-input",
                                                     placeholder="Enter directory path (e.g., C:/Users/username/Desktop)",
                                                     type="text",
-                                                    value="",
+                                                    value="./data/exports",
                                                 ),
                                             ],
                                             className="mb-3",
