@@ -53,7 +53,7 @@ def main():
             new_df = pandas.read_parquet(parquet_file)
             df = pandas.concat([df, new_df], ignore_index=True)
 
-    if len(parquet_files) > 1:
+    if len(parquet_files) > 0:
         conn = sqlite3.connect(str(args.output))
         df.to_sql("data", conn, if_exists="replace", index=False)
         conn.close()
