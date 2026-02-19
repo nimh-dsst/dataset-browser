@@ -140,6 +140,16 @@ Use `--upgrade` to get the latest versions:
 uv sync --upgrade
 ```
 
+### Windows OneDrive hardlink error (os error 396)
+If your project is inside a OneDrive-synced directory, hardlink creation can fail during install.
+
+This project sets `link-mode = "copy"` in `pyproject.toml` under `[tool.uv]` so `uv sync` works reliably.
+
+If you still see this issue locally, run:
+```bash
+uv sync --link-mode=copy
+```
+
 ## Development Workflow
 
 1. **First time setup:**

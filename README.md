@@ -32,6 +32,8 @@ Dependencies are managed through `pyproject.toml`. Install them with:
 uv sync
 ```
 
+If your repository is in a OneDrive-synced folder on Windows, `uv sync` can fail with a hardlink error (os error 396). This project is configured with `link-mode = "copy"` to avoid that.
+
 ## Usage
 
 ### Starting the App
