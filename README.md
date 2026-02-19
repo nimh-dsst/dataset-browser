@@ -1,4 +1,4 @@
-# SQLite Database Browser - Plotly Dash App
+# SQLite Database Browser
 
 A Python/web-based database browser for querying and visualizing SQLite databases. Built with Plotly Dash, it provides an intuitive interface for loading databases, exploring tables, building advanced search queries, visualizing results with interactive charts, and exporting full filtered results.
 
