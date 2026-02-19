@@ -318,6 +318,9 @@ def create_table_with_truncation(df: pd.DataFrame) -> DataTable:
             "textAlign": "left",
             "padding": "10px 5px",
             "whiteSpace": "nowrap",
+            "position": "sticky",
+            "top": "0",
+            "zIndex": "10",
         },
         style_data={
             "backgroundColor": "white",
@@ -330,6 +333,38 @@ def create_table_with_truncation(df: pd.DataFrame) -> DataTable:
             }
         ],
     )
+
+
+def get_selected_columns_for_display(df: pd.DataFrame, selected_columns: Optional[List[str]]) -> pd.DataFrame:
+    """Return DataFrame filtered to selected columns, preserving source column order."""
+    if selected_columns is None:
+        return df
+
+    selected_set = set(selected_columns)
+    valid_columns = [col for col in df.columns if col in selected_set]
+    return df.loc[:, valid_columns]
+
+
+def get_column_selector_options(columns: List[str]) -> List[Dict[str, str]]:
+    """Build dropdown options for the column selector."""
+    return [{"label": col, "value": col} for col in columns]
+
+
+def get_columns_from_records(records: Optional[List[Dict]]) -> List[str]:
+    """Extract ordered columns from query result records."""
+    if not records:
+        return []
+
+    columns = []
+    seen = set()
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                columns.append(key)
+    return columns
 
 
 def create_filter_row(filter_id: int) -> dbc.Row:
@@ -464,6 +499,91 @@ app.layout = dbc.Container(
                     ],
                     width=12,
                     lg=6,
+                )
+            ],
+            className="mb-4",
+        ),
+        # Column display section
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Card(
+                            [
+                                dbc.CardBody(
+                                    [
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    html.H5("Column Display", className="card-title mb-0"),
+                                                    width="auto",
+                                                ),
+                                                dbc.Col(
+                                                    dbc.Button(
+                                                        "Toggle",
+                                                        id="toggle-column-selector-btn",
+                                                        color="info",
+                                                        outline=True,
+                                                        size="sm",
+                                                    ),
+                                                    width="auto",
+                                                ),
+                                            ],
+                                            className="mb-2",
+                                        ),
+                                        html.P(
+                                            "Select columns to include in the table view. Unselected columns are excluded.",
+                                            className="small text-muted mb-2",
+                                        ),
+                                        dbc.Collapse(
+                                            [
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dbc.Button(
+                                                                "Select All",
+                                                                id="select-all-columns-btn",
+                                                                color="primary",
+                                                                outline=True,
+                                                                size="sm",
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                        dbc.Col(
+                                                            dbc.Button(
+                                                                "Clear All",
+                                                                id="clear-all-columns-btn",
+                                                                color="secondary",
+                                                                outline=True,
+                                                                size="sm",
+                                                            ),
+                                                            width="auto",
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                html.Div(
+                                                    id="column-checklist-container",
+                                                    style={
+                                                        "maxHeight": "300px",
+                                                        "overflowY": "auto",
+                                                        "border": "1px solid #ddd",
+                                                        "borderRadius": "4px",
+                                                        "padding": "10px",
+                                                    },
+                                                ),
+                                            ],
+                                            id="column-selector-collapse",
+                                            is_open=False,
+                                        ),
+                                        # Hidden store for column selector state
+                                        dcc.Store(id="column-selector", data=None),
+                                    ]
+                                )
+                            ]
+                        ),
+                    ],
+                    width=12,
                 )
             ],
             className="mb-4",
@@ -698,6 +818,12 @@ app.layout = dbc.Container(
                                             ],
                                             className="mb-3",
                                         ),
+                                        dbc.Checkbox(
+                                            id="export-selected-columns-only",
+                                            label="Export only currently selected/displayed columns",
+                                            value=False,
+                                            className="mb-3",
+                                        ),
                                         dbc.Button(
                                             "Export Filtered Table",
                                             id="export-table-btn",
@@ -893,6 +1019,17 @@ def remove_filter(remove_clicks, button_ids, fields, operators, values):
 
 
 @app.callback(
+    Output("column-selector-collapse", "is_open"),
+    Input("toggle-column-selector-btn", "n_clicks"),
+    State("column-selector-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_column_selector(n_clicks, is_open):
+    """Toggle the column selector collapse state."""
+    return not is_open
+
+
+@app.callback(
     Output("table-selector", "value", allow_duplicate=True),
     Output("current-table-store", "data"),
     Input("load-table-btn", "n_clicks"),
@@ -918,6 +1055,85 @@ def update_filter_field_options(columns, matched_ids):
     options = [{"label": col, "value": col} for col in columns]
     # Return one options list for each matched component
     return [options for _ in matched_ids]
+
+
+@app.callback(
+    Output("column-checklist-container", "children"),
+    Output("column-selector", "data"),
+    Input("table-columns-store", "data"),
+    Input("current-data-store", "data"),
+    Input({"type": "column-checkbox", "index": ALL}, "value"),
+    Input("select-all-columns-btn", "n_clicks"),
+    Input("clear-all-columns-btn", "n_clicks"),
+    State("column-selector", "data"),
+    State({"type": "column-checkbox", "index": ALL}, "id"),
+)
+def update_column_selector(
+    table_columns,
+    current_data,
+    checkbox_values,
+    select_all_clicks,
+    clear_all_clicks,
+    current_selection,
+    checkbox_ids,
+):
+    """Render column checklist and manage selection state."""
+    data_columns = get_columns_from_records(current_data)
+    available_columns = data_columns or (table_columns or [])
+
+    if not available_columns:
+        return html.P("No columns available", className="text-muted small"), None
+
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
+
+    # Determine selected columns based on trigger
+    if trigger_id == "select-all-columns-btn":
+        selected_columns = available_columns
+    elif trigger_id == "clear-all-columns-btn":
+        selected_columns = []
+    elif trigger_id in {"current-data-store", "table-columns-store"}:
+        # Default: select all on new dataset load
+        selected_columns = available_columns
+    elif "column-checkbox" in str(trigger_id):
+        # User toggled a checkbox - build selection from checkbox states
+        selected_columns = []
+        for checkbox_id, checked in zip(checkbox_ids, checkbox_values):
+            if checked:
+                selected_columns.append(checkbox_id["index"])
+    else:
+        # Preserve current selection
+        selected_columns = current_selection if current_selection is not None else available_columns
+
+    # Build 6-column checklist layout
+    num_cols = 6
+    num_columns = len(available_columns)
+    rows = []
+    
+    for i in range(0, num_columns, num_cols):
+        cols = []
+        for j in range(num_cols):
+            idx = i + j
+            if idx < num_columns:
+                col_name = available_columns[idx]
+                is_checked = col_name in (selected_columns or [])
+                cols.append(
+                    dbc.Col(
+                        dbc.Checkbox(
+                            id={"type": "column-checkbox", "index": col_name},
+                            label=col_name,
+                            value=is_checked,
+                            className="mb-2",
+                        ),
+                        width=2,
+                    )
+                )
+            else:
+                cols.append(dbc.Col(width=2))
+        
+        rows.append(dbc.Row(cols, className="g-2"))
+    
+    return html.Div(rows), selected_columns
 
 
 @app.callback(
@@ -1027,6 +1243,7 @@ def update_filter_value_options(fields, operators, search_values, table_name, db
     Output("sql-display", "children"),
     Output("current-data-store", "data"),
     Output("viz-column-selector", "options"),
+    Output("viz-column-selector", "value"),
     Output("table-full-data-store", "data"),
     Output("current-filters-store", "data"),
     Input("apply-filters-btn", "n_clicks"),
@@ -1034,6 +1251,7 @@ def update_filter_value_options(fields, operators, search_values, table_name, db
     State({"type": "filter-field", "index": ALL}, "value"),
     State({"type": "filter-operator", "index": ALL}, "value"),
     State({"type": "filter-value", "index": ALL}, "value"),
+    State("column-selector", "data"),
     State("current-table-store", "data"),
     State("db-path-input", "value"),
     prevent_initial_call=True,
@@ -1044,6 +1262,7 @@ def apply_filters(
     fields,
     operators,
     values,
+    selected_columns,
     table_name,
     db_path,
 ):
@@ -1066,13 +1285,13 @@ def apply_filters(
     try:
         db = DatabaseConnection(db_path)
         if not db.connect():
-            return "Error: Could not connect to database", "", "", "", None, [], None, None
+            return "Error: Could not connect to database", "", "", "", None, [], None, None, None
 
         df, error, sql_query = db.get_table_data(table_name, filters=filters)
         db.close()
 
         if error:
-            return f"Query Error: {error}", "", "", f"Error in query: {sql_query}", None, [], None, filters
+            return f"Query Error: {error}", "", "", f"Error in query: {sql_query}", None, [], None, None, filters
 
         if df.empty:
             return (
@@ -1083,39 +1302,57 @@ def apply_filters(
                 None,
                 [],
                 None,
+                None,
+                filters,
+            )
+
+        # Apply optional column selection for display
+        display_df = get_selected_columns_for_display(df, selected_columns)
+
+        if display_df.shape[1] == 0:
+            return (
+                "",
+                html.P("No columns selected. Choose at least one column in Column Display."),
+                f"Showing {len(df)} rows, 0 columns (all columns excluded)",
+                sql_query,
+                df.to_dict("records"),
+                [],
+                None,
+                {},
                 filters,
             )
 
         # Create table from results
-        table = create_table_with_truncation(df)
+        table = create_table_with_truncation(display_df)
 
         # Results info
-        info = f"Showing {len(df)} rows, {len(df.columns)} columns"
+        info = f"Showing {len(display_df)} rows, {len(display_df.columns)} of {len(df.columns)} columns"
 
         # Column options for visualization
-        all_cols = df.columns.tolist()
+        all_cols = display_df.columns.tolist()
         col_options = [{"label": col, "value": col} for col in all_cols]
+        viz_value = all_cols[0] if all_cols else None
 
-        # Store data for visualization
+        # Store full query data so column display can be changed without re-running query
         df_data = df.to_dict("records")
         
-        # Store full data (before truncation) for click-to-view feature
+        # Store displayed data (before truncation) for click-to-view feature
         # Create a dictionary with string keys for both row indices and column names
         full_data_dict = {}
-        for row_idx, (_, row) in enumerate(df.iterrows()):
+        for row_idx, (_, row) in enumerate(display_df.iterrows()):
             row_key = str(row_idx)
             full_data_dict[row_key] = {}
-            for col in df.columns:
+            for col in display_df.columns:
                 col_key = str(col)
                 full_data_dict[row_key][col_key] = str(row[col])
 
         # Format SQL display
         sql_display = html.Code(f"SQL: {sql_query}")
 
-        return "", table, info, sql_display, df_data, col_options, full_data_dict, filters
+        return "", table, info, sql_display, df_data, col_options, viz_value, full_data_dict, filters
 
     except Exception as e:
-        return f"Error: {traceback.format_exc()}", "", "", "", None, [], None, None
+        return f"Error: {traceback.format_exc()}", "", "", "", None, [], None, None, None
 
 
 @app.callback(
@@ -1146,14 +1383,16 @@ def clear_query(n_clicks):
     Output("sql-display", "children", allow_duplicate=True),
     Output("current-data-store", "data", allow_duplicate=True),
     Output("viz-column-selector", "options", allow_duplicate=True),
+    Output("viz-column-selector", "value", allow_duplicate=True),
     Output("table-full-data-store", "data", allow_duplicate=True),
     Output("current-filters-store", "data", allow_duplicate=True),
     Input("execute-query-btn", "n_clicks"),
     State("query-input", "value"),
     State("db-path-input", "value"),
+    State("column-selector", "data"),
     prevent_initial_call=True,
 )
-def execute_custom_query(n_clicks, query, db_path):
+def execute_custom_query(n_clicks, query, db_path, selected_columns):
     """Execute custom SQL query."""
     if not query or not db_path:
         raise PreventUpdate
@@ -1161,18 +1400,18 @@ def execute_custom_query(n_clicks, query, db_path):
     db_path = str(Path(db_path).expanduser())
 
     if not os.path.exists(db_path):
-        return "", "", "Database file not found", "", None, [], None, None
+        return "", "", "Database file not found", "", None, [], None, None, None
 
     try:
         db = DatabaseConnection(db_path)
         if not db.connect():
-            return "", "", "Error: Could not connect to database", "", None, [], None, None
+            return "", "", "Error: Could not connect to database", "", None, [], None, None, None
 
         df, error = db.execute_query(query)
         db.close()
 
         if error:
-            return "", "", f"Query Error: {error}", f"SQL: {query}", None, [], None, None
+            return "", "", f"Query Error: {error}", f"SQL: {query}", None, [], None, None, None
 
         if df.empty:
             return (
@@ -1184,32 +1423,50 @@ def execute_custom_query(n_clicks, query, db_path):
                 [],
                 None,
                 None,
+                None,
+            )
+
+        # Apply optional column selection for display
+        display_df = get_selected_columns_for_display(df, selected_columns)
+
+        if display_df.shape[1] == 0:
+            return (
+                html.P("No columns selected. Choose at least one column in Column Display."),
+                f"Showing {len(df)} rows, 0 columns (all columns excluded)",
+                "",
+                f"SQL: {query}",
+                df.to_dict("records"),
+                [],
+                None,
+                {},
+                None,
             )
 
         # Create table from results
-        table = create_table_with_truncation(df)
+        table = create_table_with_truncation(display_df)
 
         # Results info
-        info = f"Showing {len(df)} rows, {len(df.columns)} columns"
+        info = f"Showing {len(display_df)} rows, {len(display_df.columns)} of {len(df.columns)} columns"
 
         # Column options for visualization
-        all_cols = df.columns.tolist()
+        all_cols = display_df.columns.tolist()
         col_options = [{"label": col, "value": col} for col in all_cols]
+        viz_value = all_cols[0] if all_cols else None
 
-        # Store data for visualization
+        # Store full query data so column display can be changed without re-running query
         df_data = df.to_dict("records")
         
-        # Store full data (before truncation) for click-to-view feature
+        # Store displayed data (before truncation) for click-to-view feature
         # Create a dictionary with string keys for both row indices and column names
         full_data_dict = {}
-        for row_idx, (_, row) in enumerate(df.iterrows()):
+        for row_idx, (_, row) in enumerate(display_df.iterrows()):
             row_key = str(row_idx)
             full_data_dict[row_key] = {}
-            for col in df.columns:
+            for col in display_df.columns:
                 col_key = str(col)
                 full_data_dict[row_key][col_key] = str(row[col])
 
-        return table, info, "", f"SQL: {query}", df_data, col_options, full_data_dict, None
+        return table, info, "", f"SQL: {query}", df_data, col_options, viz_value, full_data_dict, None
 
     except Exception as e:
         return (
@@ -1221,7 +1478,55 @@ def execute_custom_query(n_clicks, query, db_path):
             [],
             None,
             None,
+            None,
         )
+
+
+@app.callback(
+    Output("table-results", "children", allow_duplicate=True),
+    Output("results-info", "children", allow_duplicate=True),
+    Output("viz-column-selector", "options", allow_duplicate=True),
+    Output("viz-column-selector", "value", allow_duplicate=True),
+    Output("table-full-data-store", "data", allow_duplicate=True),
+    Input("column-selector", "data"),
+    State("current-data-store", "data"),
+    prevent_initial_call=True,
+)
+def apply_column_selection_to_display(selected_columns, current_data):
+    """Apply selected columns to the current result set without re-running SQL."""
+    if not current_data:
+        raise PreventUpdate
+
+    df = pd.DataFrame(current_data)
+
+    if df.empty:
+        return html.P("No results found."), "No results found", [], None, {}
+
+    display_df = get_selected_columns_for_display(df, selected_columns)
+
+    if display_df.shape[1] == 0:
+        return (
+            html.P("No columns selected. Choose at least one column in Column Display."),
+            f"Showing {len(df)} rows, 0 columns (all columns excluded)",
+            [],
+            None,
+            {},
+        )
+
+    table = create_table_with_truncation(display_df)
+    info = f"Showing {len(display_df)} rows, {len(display_df.columns)} of {len(df.columns)} columns"
+    col_options = [{"label": col, "value": col} for col in display_df.columns]
+    viz_value = display_df.columns[0] if len(display_df.columns) > 0 else None
+
+    full_data_dict = {}
+    for row_idx, (_, row) in enumerate(display_df.iterrows()):
+        row_key = str(row_idx)
+        full_data_dict[row_key] = {}
+        for col in display_df.columns:
+            col_key = str(col)
+            full_data_dict[row_key][col_key] = str(row[col])
+
+    return table, info, col_options, viz_value, full_data_dict
 
 
 
@@ -1229,10 +1534,11 @@ def execute_custom_query(n_clicks, query, db_path):
 @app.callback(
     Output("data-visualization", "figure"),
     Input("current-data-store", "data"),
+    Input("column-selector", "data"),
     Input("viz-column-selector", "value"),
     Input("viz-type-selector", "value"),
 )
-def update_visualization(data, column, viz_type):
+def update_visualization(data, selected_columns, column, viz_type):
     """Update visualization based on selected column and type."""
     if not data or not column:
         return {
@@ -1245,6 +1551,17 @@ def update_visualization(data, column, viz_type):
         }
 
     df = pd.DataFrame(data)
+    df = get_selected_columns_for_display(df, selected_columns)
+
+    if df.shape[1] == 0:
+        return {
+            "data": [],
+            "layout": go.Layout(
+                title="No columns selected for visualization",
+                xaxis={"title": "X"},
+                yaxis={"title": "Y"},
+            ),
+        }
 
     if column not in df.columns:
         return {
@@ -1301,13 +1618,18 @@ def update_visualization(data, column, viz_type):
 @app.callback(
     Output("statistics-container", "children"),
     Input("current-data-store", "data"),
+    Input("column-selector", "data"),
 )
-def update_statistics(data):
+def update_statistics(data, selected_columns):
     """Display basic statistics about the data."""
     if not data:
         return html.P("Load data first to see statistics")
 
     df = pd.DataFrame(data)
+    df = get_selected_columns_for_display(df, selected_columns)
+
+    if df.shape[1] == 0:
+        return html.P("No columns selected for statistics")
 
     # Get numeric columns
     numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
@@ -1359,12 +1681,22 @@ def show_table_info(table_id):
     Output("export-status-message", "className"),
     Input("export-table-btn", "n_clicks"),
     State("export-path-input", "value"),
+    State("export-selected-columns-only", "value"),
+    State("column-selector", "data"),
     State("current-filters-store", "data"),
     State("current-table-store", "data"),
     State("db-path-input", "value"),
     prevent_initial_call=True,
 )
-def export_filtered_table(n_clicks, export_path, filters, table_name, db_path):
+def export_filtered_table(
+    n_clicks,
+    export_path,
+    export_selected_only,
+    selected_columns,
+    filters,
+    table_name,
+    db_path,
+):
     """Export the filtered table to a TSV file with timestamp.
     Re-executes the query without LIMIT to get all matching rows."""
     if not table_name or not db_path:
@@ -1403,6 +1735,21 @@ def export_filtered_table(n_clicks, export_path, filters, table_name, db_path):
         
         if df.empty:
             return "No data to export (query returned 0 rows).", "mt-2 small text-danger"
+
+        exported_df = df
+        export_sql_query = sql_query
+        
+        if export_selected_only:
+            exported_df = get_selected_columns_for_display(df, selected_columns)
+            if exported_df.shape[1] == 0:
+                return (
+                    "Export failed: no columns selected. Select at least one column or uncheck selected-columns-only export.",
+                    "mt-2 small text-danger",
+                )
+            
+            # Build SQL query with explicit column names instead of SELECT *
+            selected_col_names = ', '.join([f'"{col}"' for col in exported_df.columns])
+            export_sql_query = sql_query.replace('SELECT *', f'SELECT {selected_col_names}', 1)
         
         # Create timestamp in YYYYMMDD_hhmmss format
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1416,14 +1763,14 @@ def export_filtered_table(n_clicks, export_path, filters, table_name, db_path):
         query_path = export_dir / query_filename
         
         # Export data to TSV
-        df.to_csv(tsv_path, sep="\t", index=False)
+        exported_df.to_csv(tsv_path, sep="\t", index=False)
         
         # Export SQL query to text file
         with open(query_path, "w", encoding="utf-8") as f:
-            f.write(sql_query)
+            f.write(export_sql_query)
         
         return (
-            f"✓ Successfully exported {len(df)} rows to: {tsv_path}\n"
+            f"✓ Successfully exported {len(exported_df)} rows and {len(exported_df.columns)} columns to: {tsv_path}\n"
             f"✓ SQL query saved to: {query_path}"
         ), "mt-2 small text-success"
         
